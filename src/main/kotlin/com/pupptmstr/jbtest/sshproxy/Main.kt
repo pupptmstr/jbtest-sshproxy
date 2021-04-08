@@ -13,6 +13,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.Executors
+import kotlin.system.exitProcess
 
 
 fun main(args: Array<String>) {
@@ -124,7 +125,9 @@ fun startClient(host: String, port: Int) {
         println("Enter the number of the Fibonacci number or \'q\' to exit.")
         print("Your input: ")
         val userInput = readLine()
-        if (userInput!!.toLowerCase() == "q") {
+        if (userInput == null) {
+            break
+        } else if (userInput.toLowerCase() == "q") {
             stillWorking = false
         } else {
             try {
