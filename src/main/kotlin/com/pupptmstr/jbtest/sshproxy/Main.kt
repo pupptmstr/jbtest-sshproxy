@@ -1,31 +1,21 @@
 package com.pupptmstr.jbtest.sshproxy
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpHandler
-import com.sun.net.httpserver.HttpServer
-import java.io.BufferedOutputStream
-import java.io.BufferedReader
-import java.io.InputStream
-import java.io.InputStreamReader
-import java.net.InetSocketAddress
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.util.concurrent.Executors
-import kotlin.system.exitProcess
+import java.io.*
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 
 
 fun main(args: Array<String>) {
     when (restoreArguments(args.toList())) {
         WorkType.SERVER_DEFAULT -> {
-            startServer(WorkType.SERVER_DEFAULT.port)
+            startSocketServer(WorkType.SERVER_DEFAULT.port)
         }
         WorkType.CLIENT_DEFAULT -> {
             startClient(WorkType.CLIENT_DEFAULT.host, WorkType.CLIENT_DEFAULT.port)
         }
         WorkType.SERVER_ARGUMENT -> {
-            startServer(getPort(args.toList()))
+            startSocketServer(getPort(args.toList()))
         }
         WorkType.CLIENT_ARGUMENT -> {
             startClient(getHost(args.toList()), getPort(args.toList()))
@@ -91,21 +81,28 @@ fun printHelp() {
     )
 }
 
-fun startServer(port: Int) {
-    val server = HttpServer.create(InetSocketAddress(port), 0)
-    server.createContext("/", Server())
-    server.start()
-    println("server started")
-    var isWorking = true
-    while (isWorking) {
-        val command = readLine()
-        if (command?.toLowerCase() == "stop" || command?.toLowerCase() == "quit") {
-            server.stop(0)
-            println("server is stopping")
-            isWorking = false
+fun startSocketServer(port: Int) {
+    try {
+        ServerSocket(port).use { server ->
+            println("Server is running on port: ${server.localPort}")
+            while (true) {
+                val sender = server.accept() // подключаю клиентов
+                if (sender.isConnected) { // если клиент законнектился, то стартую свой тред
+                    println("Client connected: ${sender.isConnected} -> ${sender.inetAddress.hostAddress}:${sender.localPort}")
+                    val byteArray = ByteArray(9)
+                    sender.getInputStream().read(byteArray, 0, 9).toString()
+                    val message = String(byteArray).replace("\u0000", "") // делаем из массива байтов стрингу и убираем остальной мусор
+                    println("Server get message: [$message]")
+                    ClientThread(message, sender)
+
+                }
+            }
         }
-    }
-    println("server stopped")
+        println("Server was closed")
+    } catch (e: SocketException) {
+        println("Error: server was not closed or there was another problem")
+        e.printStackTrace()
+    } // если сокет не создался или что-то пошло не так принчу стактрейс
 }
 
 fun fibNum(num: Int): Long {
@@ -120,6 +117,9 @@ fun fibNum(num: Int): Long {
 }
 
 fun startClient(host: String, port: Int) {
+    val socket = Socket(host, port)
+    val sender = socket.getOutputStream()
+    val receiver = socket.getInputStream()
     var stillWorking = true
     while (stillWorking) {
         println("Enter the number of the Fibonacci number or \'q\' to exit.")
@@ -128,10 +128,23 @@ fun startClient(host: String, port: Int) {
         if (userInput == null) {
             break
         } else if (userInput.toLowerCase() == "q") {
+            sender.write("EXIT".toByteArray())
             stillWorking = false
         } else {
             try {
-                val res = sendRequest(host, port, userInput.toInt())
+                userInput.toInt()
+                sender.write(userInput.toByteArray())
+                var res = ""
+                var exitCondition = false
+                while (!exitCondition) {
+                    if (socket.isConnected) {
+                        val receiverAvailable = receiver.available()
+                        if (receiverAvailable > 0) {
+                            res = receiver.reader().readText()
+                            exitCondition = true
+                        }
+                    }
+                }
                 println("Answer is $res")
             } catch (e: NumberFormatException) {
                 println("Error while parsing number, try again.")
@@ -142,17 +155,13 @@ fun startClient(host: String, port: Int) {
 
         }
     }
-}
-
-fun sendRequest(host: String, port: Int, number: Int): String {
-    val request = HttpRequest.newBuilder()
-        .uri(URI("http", "", host, port, "", "", ""))
-        .POST(HttpRequest.BodyPublishers.ofString(number.toString()))
-        .build()
-    val response: HttpResponse<String> = HttpClient.newBuilder()
-        .build()
-        .send(request, HttpResponse.BodyHandlers.ofString())
-    return response.body()
+    try {
+        socket.close()
+        println("Bye!")
+    } catch (e: SocketException) {
+        println("ERROR! Socket wasn't closed!")
+        e.printStackTrace()
+    }
 }
 
 enum class WorkType(val host: String, val port: Int) {
@@ -163,29 +172,26 @@ enum class WorkType(val host: String, val port: Int) {
     HELP("", 0),
 }
 
-class Server() : HttpHandler {
-    private val executor = Executors.newFixedThreadPool(2)
-    override fun handle(exchange: HttpExchange?) {
-        executor.execute(ClientHandler(exchange!!))
-    }
-}
-
-class ClientHandler(private val exchange: HttpExchange) : Runnable {
+class ClientThread(private val message: String, private val socket: Socket): Thread() {
+    init { this.start() } // стартую тред при инициализации
     override fun run() {
-        val inputStream: InputStream = exchange.requestBody
-        val stringBuilder = StringBuilder()
-        BufferedReader(InputStreamReader(inputStream)).lines().forEach {
-            stringBuilder.append(it)
+        val outputStream = socket.getOutputStream()
+        println("New Thread created, id: ${this.id}")
+        if (message == "EXIT") {
+            try {
+                socket.close() // закрываем сокет
+                outputStream.close()
+                println("Socket(sender) was closed: ${socket.isClosed} ")
+            } catch (e: SocketException) {
+                println("Error: socket was not closed")
+                e.printStackTrace()
+            }
+        } else {
+            val answer = fibNum(message.toInt()).toString()
+            if (socket.isConnected) { // проверяем есть ли коннект
+                outputStream.write(answer.toByteArray()) // создаем сообщение и отправляем в стрим
+                outputStream.flush()
+            }
         }
-        val requestBody = stringBuilder.toString().toInt()
-        val res = fibNum(requestBody).toString()
-        val outputStream = BufferedOutputStream(exchange.responseBody)
-        val resBody = res.toByteArray()
-        exchange.responseHeaders.set("Content-Type", "text/plain")
-        exchange.sendResponseHeaders(200, resBody.size.toLong())
-        outputStream.write(resBody)
-        outputStream.flush()
-        outputStream.close()
     }
-
 }
