@@ -133,7 +133,7 @@ fun startClient(host: String, port: Int) {
                 var exitCondition = false
                 while (!exitCondition) {
                     if (socket.isConnected) {
-                        val byteArray = ByteArray(9)
+                        val byteArray = ByteArray(50)
                         val receiverAvailable = receiver.available()
                         if (receiverAvailable > 0) {
                             receiver.read(byteArray, 0, 9).toString()
